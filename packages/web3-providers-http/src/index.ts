@@ -1,4 +1,4 @@
-﻿/*
+/*
 This file is part of web3.js.
 
 web3.js is free software: you can redistribute it and/or modify
@@ -69,21 +69,46 @@ export default class HttpProvider<
 			...this.httpProviderOptions?.providerOptions,
 			...requestOptions,
 		};
-		const response = await fetch(this.clientUrl, {
-			...providerOptionsCombined,
-			method: 'POST',
-			headers: {
-				...providerOptionsCombined.headers,
-				'Content-Type': 'application/json',
-			},
-			body: JSON.stringify(payload),
-		});
-		if (!response.ok) {
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-			throw new ResponseError(await response.json(), undefined, undefined, response.status);
+
+		const { timeout } = this.httpProviderOptions ?? {};
+		let controller: AbortController | undefined;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		let timeoutId: any;
+
+		if (timeout !== undefined && timeout > 0) {
+			controller = new AbortController();
+			timeoutId = setTimeout(() => {
+				controller!.abort(); // eslint-disable-line @typescript-eslint/no-non-null-assertion
+			}, timeout);
+			providerOptionsCombined.signal = controller.signal;
 		}
 
-		return (await response.json()) as JsonRpcResponseWithResult<ResultType>;
+		try {
+			const response = await fetch(this.clientUrl, {
+				...providerOptionsCombined,
+				method: 'POST',
+				headers: {
+					...providerOptionsCombined.headers,
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify(payload),
+			});
+			if (!response.ok) {
+				// eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+				throw new ResponseError(await response.json(), undefined, undefined, response.status);
+			}
+
+			return (await response.json()) as JsonRpcResponseWithResult<ResultType>;
+		} catch (error) {
+			if (controller?.signal.aborted) {
+				throw new Error(`Request timed out after ${timeout}ms`);
+			}
+			throw error;
+		} finally {
+			if (timeoutId !== undefined) {
+				clearTimeout(timeoutId);
+			}
+		}
 	}
 
 	/* eslint-disable class-methods-use-this */
